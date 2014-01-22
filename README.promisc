@@ -1,0 +1,79 @@
+Hello,
+
+If you wish to account with netflow module traffic mirrored on switch you may follow this example:
+
+
+   Solution 1: General kernel patch.
+   Solution 2: Alternative w/o kernel patch.
+
+
+    **************
+    * Solution 1 *
+    **************
+
+1. Patch your kernel with `raw_promisc.patch' to enable raw table to see promisc traffic.
+
+ # cd /usr/src/linux
+ # patch -p1 < ~/ipt_netflow/raw_promisc.patch
+
+ Then recompile and reinstall patched kernel.
+
+2. For example you mirroring traffic on your Cisco switch to 47th vlan:
+
+ # interface FastEthernet0/32
+ # description this port with vlan 47
+ # switchport trunk encapsulation dot1q
+ # switchport mode trunk
+ # !
+ # interface FastEthernet0/33
+ # port monitor FastEthernet0/32
+ # !
+
+3. Enable promisc mode on interface to actually see the packets:
+
+ # /sbin/ifconfig eth1 promisc
+
+4. Configure vlan on your linux box:
+
+ # /sbin/vconfig add eth1 47
+ # /sbin/ifconfig eth1.47 up
+
+5. Compile module:
+
+ # make clean all install
+
+6. Load ipt_netflow module:
+
+ # /sbin/modprobe ipt_NETFLOW hashsize=160000 destination=127.0.0.1:9800
+
+7. Direct all packets from 47th vlan to ipt_netflow module:
+
+ # /sbin/iptables -A PREROUTING -t raw -i eth1.47 -j NETFLOW
+
+Voila.
+
+ps. For Debian Squeeze instructions look at raw_promisc_debian_squeeze6.patch
+
+
+    **************
+    * Solution 2 *
+    **************
+
+By Anonymous.
+
+> raw promisc hack is not needed
+> there is a more elegant way to capture port mirrored traffic:
+>
+> 1. create a bridge of eth0 and dummy0
+> 2. put eth0 to promisc
+> 3. add a "-i br0 -j NETFLOW" rule to FORWARD (possibly also -j DROP after that)
+>
+> ...for some reason it works when ipt_netflow is attached to a bridge, but
+> requires the promisc hack when attached to a real promisc interface.
+
+Sometimes you may need to run:
+
+ # brctl setageing br0 0
+
+for this scheme to work.
+

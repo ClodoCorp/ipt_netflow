@@ -1,0 +1,4 @@
+dont-build-kernel-module-on-install.patch
+dont-use-preconfigured-kernel-version.patch
+remove-bogus-makefile-target.patch
+configure.patch

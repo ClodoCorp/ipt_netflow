@@ -1,0 +1,407 @@
+ipt_NETFLOW linux 2.6.x-3.x kernel module by <abc@telekom.ru> -- 2008-2013.
+
+   High performance NetFlow v5, v9, IPFIX flow data export module for Linux
+   kernel. Supporting IPv4 and IPv6. Created to be useful for highly loaded
+   linux router. It should be used as iptables target. Also can export NAT
+   translation events using NetFlow Event Logging (NEL) for v9, IPFIX, or
+   specially crafted v5 flows.
+
+
+============================
+= OBTAINING LATEST VERSION =
+============================
+
+   $ git clone git://git.code.sf.net/p/ipt-netflow/code ipt-netflow
+   $ cd ipt-netflow
+
+
+================
+= INSTALLATION =
+================
+
+   Four easy steps.
+
+** 1. Prepare Kernel source
+
+   If you have package system install kernel-devel package, otherwise install
+   raw kernel source from http://kernel.org matching _exactly_ version of your
+   installed kernel.
+
+   a) What to do for Centos:
+
+      ~# yum install kernel-devel
+
+   b) What to do for Debian:
+
+      ~# apt-get install module-assistant
+      ~# m-a prepare
+
+   c) Otherwise, if you downloaded raw kernel sources don't forget to create
+    .config by copying it from your distribution's kernel. Its copy could reside
+    in /boot or sometimes in /proc, examples:
+
+      kernel-src-dir/# cp /boot/config-`uname -r` .config
+    or
+      kernel-src-dir/# zcat /proc/config.gz > .config
+
+    Assuming you unpacked kernel source into `kernel-src-dir/' directory.
+    Then run:
+
+      kernel-src-dir/# make oldconfig
+
+    After that you'll need to prepare kernel for modules build:
+
+      kernel-src-dir/# make prepare modules_prepare
+
+   Note: Don't try to `make prepare' in Centos kernel-devel package directory
+     (which is usually something like /usr/src/kernels/2.6.32-431.el6.x86_64)
+     as this is wrong and meaningless.
+
+** 2. Prepare Iptables
+
+   Before this step it also would be useful to install pkg-config if don't
+   already have.
+
+   If you have package system just install iptables-devel (or iptables-dev)
+   package, otherwise install iptables source matching version of your
+   installation from ftp://ftp.netfilter.org/pub/iptables/
+
+   a) What to do for Centos:
+
+      # yum install iptables-devel
+
+   b) What to do for Debian:
+
+      # apt-get install iptables-dev pkg-config
+
+   c) Otherwise, for raw iptables source build it and make install.
+
+** 3. Now, to actually build the module run:
+
+      ~/ipt-netflow# ./configure
+      ~/ipt-netflow# make all install
+      ~/ipt-netflow# depmod
+
+   This will install kernel module and iptables specific library.
+
+   Troubleshooting:
+
+     a) Sometimes you will want to add CC=gcc-3 to make command.
+     Example: make CC=gcc-3.3
+
+     b) Compile module with actual kernel source compiled.
+     I.e. first compile kernel and boot into it, and then compile module.
+     If you are using kernel-devel package check that its version matches
+     your kernel package.
+
+     c) If you have sources in non-standard places or configure isn't able to
+     find something run ./configure --help to see how to specify paths manually.
+
+** 4. After this point you should be able to load module and
+     use -j NETFLOW target in your iptables. See next section.
+
+
+===========
+= RUNNING =
+===========
+
+1. You can load module directly by insmod like this:
+
+     # insmod ipt_NETFLOW.ko destination=127.0.0.1:2055 debug=1
+
+   Or if properly installed (make install; depmod) by this:
+
+     # modprobe ipt_NETFLOW destination=127.0.0.1:2055
+
+   See, you may add options in insmod/modprobe command line, or add
+   them in /etc/modprobe.conf or /etc/modprobe.d/ipt_NETFLOW.conf
+   like thus:
+
+     options ipt_NETFLOW destination=127.0.0.1:2055 protocol=9 natevents=1
+
+2. Statistics is in /proc/net/stat/ipt_netflow
+   To view boring slab statistics: grep ipt_netflow /proc/slabinfo
+
+3. You can view parameters and control them via sysctl, example:
+
+     # sysctl net.netflow
+     # sysctl net.netflow.hashsize=32768
+
+   Note: For after-reboot configuration I recommend to store module parameters
+   in modprobe configs instead of storing them in /etc/sysctl.conf, as it's
+   less clear when init process will apply sysctl.conf, before of after
+   module's load.
+
+4. Example of directing all IPv4 traffic into the module:
+
+     # iptables -I FORWARD -j NETFLOW
+     # iptables -I INPUT -j NETFLOW
+     # iptables -I OUTPUT -j NETFLOW
+
+   Note: It is preferable (because easier to understand) to _insert_
+   NETFLOW target at the top of the chain, otherwise not all traffic may
+   reach NETFLOW if your iptables configuration is complicated and some
+   other rule inadvertently consume the traffic (dropping or acepting before
+   NETFLOW is reached). It's always good to test your configuration.
+   Use  iptables -L -nvx  to check pkts/bytes counters on the rules.
+
+5. If you want to account IPv6 traffic you should use protocol 9 or 10.
+   Example of directing all IPv6 traffic into the module:
+
+     # sysctl net.netflow.protocol=10
+     # ip6tables -I FORWARD -j NETFLOW
+     # ip6tables -I INPUT -j NETFLOW
+     # ip6tables -I OUTPUT -j NETFLOW
+
+   Note: First enable right version of protocol and after that add ip6tables
+     rules, otherwise you will get errors in dmesg.
+
+6. If you want to account NAT events (NEL):
+
+     # sysctl net.netflow.natevents=1
+
+   Note that natevents feature is completely independent from traffic accounting
+   (it's using so called conntrack events), thus you don't need to set or change
+   any iptables rules to use that. You may need to enable kernel config option
+   CONFIG_NF_CONNTRACK_EVENTS though (if it isn't already enabled).
+   For details on how they are exported for different protocol versions see
+   below.
+
+===========
+= OPTIONS =
+===========
+
+   protocol=5
+     - what version of NetFlow protocol to use. Default is 5.
+       You can choose from 5, 9, or 10 (where 10 is IPFIX). If you plan
+       to account IPv6 traffic you should use protocol 9 or 10 (IPFIX),
+       because NetFlow v5 isn't compatible with IPv6.
+
+   destination=127.0.0.1:2055
+     - where to export netflow, to this ip address
+       You will see this connection in netstat like this:
+       udp 0 0 127.0.0.1:32772 127.0.0.1:2055 ESTABLISHED 
+
+   destination=127.0.0.1:2055,192.0.0.1:2055
+     - mirror flows to two (can be more) addresses, separate addresses
+       with comma.
+
+   natevents=1
+     - Collect and send NAT translation events as NetFlow Event Logging (NEL)
+       for NetFlow v9/IPFIX, or as dummy flows compatible with NetFlow v5.
+       Default is 0 (don't send).
+
+       For NetFlow v5 protocol meaning of fields in dummy flows are such:
+         Src IP, Src Port  is Pre-nat source address.
+         Dst IP, Dst Port  is Post-nat destination address.
+           - These two fields made equal to data flows catched in FORWARD chain.
+	 Nexthop, Src AS  is Post-nat source address for SNAT. Or,
+	 Nexthop, Dst AS  is Pre-nat destination address for DNAT.
+	 TCP Flags is SYN+SCK for start event, RST+FIN for stop event.
+	 Pkt/Traffic size is 0 (zero), so it won't interfere with accounting.
+
+   inactive_timeout=15
+     - export flow after it's inactive 15 seconds. Default value is 15.
+
+   active_timeout=1800
+     - export flow after it's active 1800 seconds (30 minutes). Default valuae
+       is 1800.
+
+   refresh-rate=20
+     - for NetFlow v9 and IPFIX it's rate how frequently to re-send templates
+       (per packets). You probably don't need to change default (which is 20).
+
+   timeout-rate=30
+     - for NetFlow v9 and IPFIX it's rate when to re-send old templates (in
+       minutes). No need to change it.
+
+   debug=0
+     - debug level (none).
+
+   sndbuf=number
+     - size of output socket buffer in bytes. I recommend you to put
+       higher value if you experience netflow packet drops (can be
+       seen in statistics as 'sock: fail' number.)
+       Default value is system default.
+
+   hashsize=number
+     - Hash table bucket size. Used for performance tuning.
+       Abstractly speaking, it should be minimum two times bigger than flows
+       you usually have, but not need to.
+       Default is system memory dependent small enough value.
+
+   maxflows=2000000
+     - Maximum number of flows to account. It's here to prevent DOS attacks.
+       After this limit reached new flows will not be accounted. Default is
+       2000000, zero is unlimited.
+
+   aggregation=string..
+     - Few aggregation rules (or some say they are rule.)
+
+     Buffer for aggregation string 1024 bytes, and sysctl limit it
+       to ~700 bytes, so don't write there a lot.
+     Rules worked in definition order for each packet, so don't
+       write them a lot again.
+     Rules applied to both directions (dst and src).
+     Rules tried until first match, but for netmask and port
+        aggregations separately.
+     Delimit them with commas.
+
+     Rules are of two kinds: for netmask aggregation
+        and port aggregation:
+
+     a) Netmask aggregation example: 192.0.0.0/8=16
+     Which mean to strip addresses matching subnet 192.0.0.0/8 to /16.
+
+     b) Port aggregation example: 80-89=80
+     Which mean to replace ports from 80 to 89 with 80.
+
+     Full example:
+        aggregation=192.0.0.0/8=16,10.0.0.0/8=16,80-89=80,3128=80
+        
+====================
+= HOW TO READ STAT =
+====================
+
+  Statistics is your friend to fine tune and understand netflow module
+  performance.
+
+  To see stat:
+  # cat /proc/net/stat/ipt_netflow
+
+  How to interpret the data:
+
+> Flows: active 5187 (peak 83905 reached 0d0h1m ago, maxflows 2000000), mem 283K, worker delay 100/1000.
+
+  active X: currently active flows in memory cache.
+    - for optimum CPU performance it is recommended to set hash table size to
+      twice of average of this value, or higher.
+  peak X reached Y ago: peak value of active flows.
+  mem XK: how much kilobytes of memory currently taken by active flows.
+    - one active flow taking 56 bytes of memory.
+    - there is system limit on cache size too.
+  worker delay X/HZ: how frequently exporter scan flows table per second.
+
+> Hash: size 8192 (mem 32K), metric 1.00, [1.00, 1.00, 1.00]. MemTraf: 1420 pkt, 364 K (pdu 0, 0).
+
+  Hash: size X: current hash size/limit.
+    - you can control this by sysctl net.netflow.hashsize variable.
+    - increasing this value can significantly reduce CPU load.
+    - default value is not optimal for performance.
+    - optimal value is twice of average of active flows.
+  mem XK: how much memory occupied by hash table.
+    - hash table is fixed size by nature, taking 4 bytes per entry.
+  metric X, [X, X, X]: how optimal is your hash table being used.
+    - lesser value mean more optimal hash table use, min is 1.0.
+    - last three numbers in squares is moving average (EWMA) of hash table
+      access divided by match rate (searches / matches) for 4sec, and 1, 5, and
+      15 minutes. Sort of hash table load average. First value is instantaneous.
+      You can try to increase hashsize if averages more than 1 (increase
+      certainly if >= 2).
+  MemTraf: X pkt, X K: how much traffic accounted for flows that are in memory.
+    - these flows that are residing in internal hash table.
+  pdu X, X: how much traffic in flows preparing to be exported.
+    - it is included already in aforementioned MemTraf total.
+
+> Protocol version 10 (ipfix), refresh-rate 20, timeout-rate 30, (templates 2, active 2). Timeouts: active 5, inactive 15. Maxflows 2000000
+
+  Protocol version currently in use. Refresh-rate and timeout-rate
+      for v9 and IPFIX. Total templates generated and currently active.
+  Timeout: active X: how much seconds to wait before exporting active flow.
+    - same as sysctl net.netflow.active_timeout variable.
+  inactive X: how much seconds to wait before exporting inactive flow.
+    - same as sysctl net.netflow.inactive_timeout variable.
+  Maxflows 2000000: maxflows limit.
+    - all flows above maxflows limit must be dropped.
+    - you can control maxflows limit by sysctl net.netflow.maxflows variable.
+
+> Rate: 202448 bits/sec, 83 packets/sec; 1 min: 668463 bps, 930 pps; 5 min: 329039 bps, 483 pps
+
+  - Module throughput values for 1 second, 1 minute, and 5 minutes.
+
+> cpu#  stat: <search found new [metric], trunc frag alloc maxflows>, sock: <ok fail cberr, bytes>, traffic: <pkt, bytes>, drop: <pkt, bytes>
+> cpu0  stat: 980540  10473 180600 [1.03],    0    0    0    0, sock:   4983 928 0, 7124 K, traffic: 188765, 14 MB, drop: 27863, 1142 K
+
+  cpu#: this is Total and per CPU statistics for:
+  stat: <search found new, trunc frag alloc maxflows>: internal stat for:
+  search found new: hash table searched, found, and not found counters.
+  [metric]: average hash metric since module load.
+  trunc: how much truncated packets are ignored
+    - these are that possible don't have valid IP header.
+    - accounted in drop packets counter but not in drop bytes.
+  frag: how much fragmented packets have seen.
+    - kernel always defragments INPUT/OUTPUT chains for us.
+    - these packets are not ignored but not reassembled either, so:
+    - if there is no enough data in fragment (ex. tcp ports) it is considered
+      zero.
+  alloc: how much cache memory allocations are failed.
+    - packets ignored and accounted in drop stat.
+    - probably increase system memory if this ever happen.
+  maxflows: how much packets ignored on maxflows (maximum active flows reached).
+    - packets ignored and accounted in drop stat.
+    - you can control maxflows limit by sysctl net.netflow.maxflows variable.
+
+  sock: <ok fail cberr, bytes>: table of exporting stats for:
+  ok: how much Netflow PDUs are exported (i.e. UDP packets sent by module).
+  fail: how much socket errors (i.e. packets failed to be sent).
+    - packets dropped and their internal statistics cumulatively accounted in
+      drop stat.
+  cberr: how much connection refused ICMP errors we got from export target.
+    - probably you not launched collector software on destination,
+    - or specified wrong destination address.
+    - flows lost in this fashion is not possible to account in drop stat.
+    - these are ICMP errors, and would look like this in tcpdump:
+      05:04:09.281247 IP alice.19440 > bob.2055: UDP, length 120
+      05:04:09.281405 IP bob > alice: ICMP bob udp port 2055 unreachable, length 156
+  bytes: how much kilobytes of exporting data successfully sent by the module.
+
+  traffic: <pkt, bytes>: how much traffic is accounted.
+  pkt, bytes: sum of packets/megabytes accounted by module.
+    - flows that failed to be exported (on socket error) is accounted here too.
+
+  drop: <pkt, bytes>: how much of traffic is not accounted.
+  pkt, bytes: sum of packets/kilobytes we are lost/dropped.
+    - reasons they are dropped and accounted here:
+      truncated/fragmented packets,
+      packet is for new flow but failed to allocate memory for it,
+      packet is for new flow but maxflows is already reached,
+      all flows in export packets that got socket error.
+
+> Natevents disabled, count start 0, stop 0.
+
+    - Natevents mode disabled or enabled, and how much start or stop events
+      are reported.
+
+> sock0: 10.0.0.2:2055 unconnected (1 attempts).
+
+  If socket is unconnected (for example if module loaded before interfaces is
+  up) it shows now much connection attempts was failed. It will try to connect
+  until success.
+
+> sock0: 10.0.0.2:2055, sndbuf 106496, filled 0, peak 106848; err: sndbuf reached 928, connect 0, other 0
+
+  sockX: per destination stats for:
+  X.X.X.X:Y: destination ip address and port.
+    - controlled by sysctl net.netflow.destination variable.
+  sndbuf X: how much data socket can hold in buffers.
+    - controlled by sysctl net.netflow.sndbuf variable.
+    - if you have packet drops due to sndbuf reached (error -11) increase this
+      value.
+  filled X: how much data in socket buffers right now.
+  peak X: peak value of how much data in socket buffers was.
+    - you will be interested to keep it below sndbuf value.
+  err: how much packets are dropped due to errors.
+    - all flows from them will be accounted in drop stat.
+  sndbuf reached X: how much packets dropped due to sndbuf being too small
+      (error -11).
+  connect X: how much connection attempts was failed.
+  other X: dropped due to other possible errors.
+
+> aggr0: ...
+  aggrX: aggregation rulesets.
+    - controlled by sysctl net.netflow.aggregation variable.
+
+=========
+= VOILA =
+=========
+
