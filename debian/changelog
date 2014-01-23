@@ -1,4 +1,4 @@
-ipt-netflow (1.8.2-1) stable; urgency=high
+ipt-netflow (1.8.2-1) wheezy; urgency=high
 
   * Initial release.
 
