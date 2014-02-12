@@ -1,3 +1,9 @@
+ipt-netflow (1.8.2-3) wheezy; urgency=high
+
+  * Disable conntrack dep.
+
+ -- Vasiliy Tolstov <v.tolstov@selfip.ru>  Thu, 21 Mar 2013 13:24:23 +0400
+
 ipt-netflow (1.8.2-2) wheezy; urgency=high
 
   * Initial release.
